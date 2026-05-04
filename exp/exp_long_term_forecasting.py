@@ -249,22 +249,61 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
         print('test shape:', preds.shape, trues.shape)
 
+        # ── Scaled metrics (on normalized values) ────────────────────────────────
+        mae_scaled, mse_scaled, rmse_scaled, mape_scaled, mspe_scaled = metric(preds, trues)
+        print('Scaled   | mse: {:.7f}, mae: {:.7f}'.format(mse_scaled, mae_scaled))
+        
+        # ── Real metrics (after inverse transform) ───────────────────────────────
+        
+        shape = trues.shape  # (N, pred_len, n_features)
+        n, t, c = shape
+
+        if self.args.features == 'MS':
+            # Model only predicts target (1 col), but scaler expects all cols
+            # Tile preds to full feature width, inverse, then slice back
+            n_total_feats = test_data.scaler.n_features_in_
+            preds_full = np.tile(preds, [1, 1, n_total_feats])   # (N, T, all_feats)
+            trues_full = np.tile(trues, [1, 1, n_total_feats])
+            preds_real = test_data.inverse_transform(
+                preds_full.reshape(n * t, -1)
+            ).reshape(n, t, n_total_feats)[:, :, -1:]            # keep only target col
+            trues_real = test_data.inverse_transform(
+                trues_full.reshape(n * t, -1)
+            ).reshape(n, t, n_total_feats)[:, :, -1:]
+        else:
+            preds_real = test_data.inverse_transform(
+                preds.reshape(n * t, c)
+            ).reshape(shape)
+            trues_real = test_data.inverse_transform(
+                trues.reshape(n * t, c)
+            ).reshape(shape)
+            
+        mae_real, mse_real, rmse_real, mape_real, mspe_real = metric(preds_real, trues_real)
+        print('Real     | mse: {:.7f}, mae: {:.7f}'.format(mse_real, mae_real))
+
         # result save
         folder_path = './results/' + setting + '/'
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
 
-        mae, mse, rmse, mape, mspe = metric(preds, trues)
-        print('mse:{}, mae:{}'.format(mse, mae))
+        # Write both to result file
         f = open("result_long_term_forecast.txt", 'a')
         f.write(setting + "  \n")
-        f.write('mse:{}, mae:{}'.format(mse, mae))
-        f.write('\n')
+        f.write('Scaled  | mse:{:.7f}, mae:{:.7f}\n'.format(mse_scaled, mae_scaled))
+        if mae_real is not None:
+            f.write('Real    | mse:{:.7f}, mae:{:.7f}\n'.format(mse_real, mae_real))
         f.write('\n')
         f.close()
 
-        np.save(folder_path + 'metrics.npy', np.array([mae, mse, rmse, mape, mspe]))
+        # Save scaled metrics & arrays
+        np.save(folder_path + 'metrics_scaled.npy', np.array([mae_scaled, mse_scaled, rmse_scaled, mape_scaled, mspe_scaled]))
         np.save(folder_path + 'pred.npy', preds)
         np.save(folder_path + 'true.npy', trues)
+
+        # Save real-scale metrics & arrays (only if scaler was used)
+        if mae_real is not None:
+            np.save(folder_path + 'metrics_real.npy', np.array([mae_real, mse_real, rmse_real, mape_real, mspe_real]))
+            np.save(folder_path + 'pred_real.npy', preds_real)
+            np.save(folder_path + 'true_real.npy', trues_real)
 
         return
